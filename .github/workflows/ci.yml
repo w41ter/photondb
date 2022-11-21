@@ -1,5 +1,9 @@
 name: CI
 
+env:
+  RUST_BACKTRACE: 10
+  RUST_LOG: debug
+
 on:
   push:
   pull_request:
