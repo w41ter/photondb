@@ -104,14 +104,18 @@ impl<E: Env> Guard<E> {
 
         let last_guard = owned_pages.last().unwrap();
         let page = last_guard.value();
-        if !hit {
-            self.writebuf_stats.read_file_bytes.add(page.len() as u64);
-        }
-
-        Ok(PageRef::new(unsafe {
+        let page_ref = PageRef::new(unsafe {
             // Safety: the lifetime is guarranted by `guard`.
             std::slice::from_raw_parts(page.as_ptr(), page.len())
-        }))
+        });
+        if !hit {
+            self.writebuf_stats.read_file_bytes.add(page.len() as u64);
+            if page_ref.tier().is_inner() {
+                self.writebuf_stats.inner_page_miss.inc();
+            }
+        }
+
+        Ok(page_ref)
     }
 }
 
