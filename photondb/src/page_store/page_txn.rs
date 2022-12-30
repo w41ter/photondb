@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use bitflags::bitflags;
@@ -92,10 +93,12 @@ impl<E: Env> Guard<E> {
     }
 
     pub(crate) fn read_page_info(&self, addr: u64) -> Result<PageInfo> {
+        let start_at = Instant::now();
         let logical_id = (addr >> 32) as u32;
         if let Some(buf) = self.version.get(logical_id) {
             // Safety: all mutable references are released.
             let page = unsafe { buf.page(addr) };
+            crate::perf::with(|ctx| ctx.add_get_page_info(start_at.elapsed()));
             return Ok(page.info());
         }
 
@@ -107,6 +110,10 @@ impl<E: Env> Guard<E> {
             panic!("The addr {addr} is not belongs to the target file");
         };
 
+        crate::perf::with(|ctx| {
+            ctx.add_get_page_info(start_at.elapsed());
+            ctx.inc_get_page_info_count();
+        });
         Ok(page_info)
     }
 
@@ -115,10 +122,12 @@ impl<E: Env> Guard<E> {
         addr: u64,
         hint: CacheOption,
     ) -> Result<(PageRef, Option<CacheToken>)> {
+        let start_at = Instant::now();
         let logical_id = (addr >> 32) as u32;
         if let Some(buf) = self.version.get(logical_id) {
             self.writebuf_stats.read_in_buf.inc();
             // Safety: all mutable references are released.
+            crate::perf::with(|ctx| ctx.add_get_page(start_at.elapsed()));
             return Ok((unsafe { buf.page(addr) }, None));
         }
         self.writebuf_stats.read_in_file.inc();
@@ -159,6 +168,13 @@ impl<E: Env> Guard<E> {
             self.writebuf_stats.miss_inner.inc();
         }
 
+        crate::perf::with(|ctx| {
+            ctx.add_get_page(start_at.elapsed());
+            ctx.inc_get_page_from_cache_count();
+            if !hit {
+                ctx.inc_get_page_from_cache_miss_count();
+            }
+        });
         Ok((page, Some(cache_token)))
     }
 }

@@ -30,7 +30,9 @@
     io_error_more,
     type_alias_impl_trait,
     hash_drain_filter,
-    pointer_is_aligned
+    pointer_is_aligned,
+    local_key_cell_methods,
+    concat_idents
 )]
 
 pub mod env;
@@ -53,6 +55,8 @@ pub use page_store::{
 
 mod page;
 mod util;
+
+pub mod perf;
 
 #[cfg(test)]
 mod tests {

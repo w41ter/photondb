@@ -1,6 +1,7 @@
 use std::{
     fmt,
     sync::atomic::{AtomicU64, Ordering},
+    time::Instant,
 };
 
 use log::trace;
@@ -104,8 +105,11 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
     /// Gets the value corresponding to the key.
     pub(crate) async fn get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
+        let start_at = Instant::now();
         let (view, _) = self.find_leaf(key.raw).await?;
+        let before_find_value = Instant::now();
         let value = self.find_value(&key, &view).await?;
+        crate::perf::with(|ctx| ctx.set_find_value(before_find_value.duration_since(start_at)));
 
         let key_size = key.len() as u64;
         let value_size = value.map(|v| v.len()).unwrap_or_default() as u64;
@@ -114,18 +118,21 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             .success
             .read_bytes
             .add(key_size + value_size);
+        crate::perf::with(|ctx| ctx.set_total(start_at.elapsed()));
 
         Ok(value)
     }
 
     /// Writes the key-value pair to the tree.
     pub(crate) async fn write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
+        let start_at = Instant::now();
         let bytes = key.len() + value.len();
         loop {
             match self.try_write(key, value).await {
                 Ok(_) => {
                     self.tree.stats.success.write.inc();
                     self.tree.stats.success.write_bytes.add(bytes as u64);
+                    crate::perf::with(|ctx| ctx.set_total(start_at.elapsed()));
                     return Ok(());
                 }
                 Err(Error::Again) => {
@@ -138,7 +145,12 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     async fn try_write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
+        let before_find_leaf = Instant::now();
         let (mut view, _) = self.find_leaf(key.raw).await?;
+        let after_find_leaf = Instant::now();
+        crate::perf::with(|ctx| {
+            ctx.set_find_leaf(after_find_leaf.duration_since(before_find_leaf))
+        });
 
         // Try to split the page before every write to avoid starving the split
         // operation due to contentions.
@@ -152,6 +164,10 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         let mut txn = self.guard.begin().await;
         let (new_addr, mut new_page) = txn.alloc_page(builder.size()).await?;
         builder.build(&mut new_page);
+        let after_build_page = Instant::now();
+        crate::perf::with(|ctx| {
+            ctx.set_write_build_page(after_build_page.duration_since(after_find_leaf))
+        });
 
         // Update the corresponding leaf page with the delta.
         loop {
@@ -160,6 +176,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             new_page.set_chain_next(view.addr);
             match txn.update_page(view.id, view.addr, new_addr) {
                 Ok(_) => {
+                    crate::perf::with(|ctx| ctx.add_replace_page(after_build_page.elapsed()));
                     view.addr = new_addr;
                     view.page = new_page.info();
                     break;
@@ -419,6 +436,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         K: SortedPageKey,
         V: SortedPageValue,
     {
+        let start_at = Instant::now();
         if view.id == ROOT_ID {
             return self.split_root_impl::<K, V>(view).await;
         }
@@ -463,6 +481,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                 Error::Again
             })?;
 
+        crate::perf::with(|ctx| ctx.add_split_page(start_at.elapsed()));
         Ok(())
     }
 
@@ -628,6 +647,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     {
         // Collect information for this consolidation.
         let info = self.collect_consolidation_info(&view).await?;
+        let start_at = Instant::now();
         let iter = f(info.iter);
         let builder = SortedPageBuilder::new(view.page.tier(), PageKind::Data).with_iter(iter);
         let mut txn = self.guard.begin().await;
@@ -642,6 +662,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             .map(|_| {
                 trace!("consolidate page {:?}", view);
                 self.tree.stats.success.consolidate_page.inc();
+                crate::perf::with(|ctx| ctx.add_consolidate_page(start_at.elapsed()));
                 view.addr = new_addr;
                 view.page = new_page.info();
                 view
@@ -661,6 +682,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         K: SortedPageKey,
         V: SortedPageValue,
     {
+        let start_at = Instant::now();
         let chain_len = view.page.chain_len() as usize;
         let mut builder = MergingIterBuilder::with_capacity(chain_len);
         let mut page_size = 0;
@@ -703,6 +725,11 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             CacheOption::REFILL_COLD_WHEN_NOT_FULL,
         )
         .await?;
+        crate::perf::with(|ctx| {
+            ctx.add_consolidate_page_size(page_size);
+            ctx.add_consolidate_length(page_addrs.len());
+            ctx.add_collect_info(start_at.elapsed());
+        });
         let iter = MergingPageIter::new(builder.build(), range_limit);
         Ok(ConsolidationInfo {
             iter,

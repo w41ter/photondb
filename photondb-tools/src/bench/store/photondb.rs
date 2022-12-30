@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use photondb::{
@@ -52,12 +52,24 @@ where
     }
 
     async fn put(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
+        photondb::perf::reset_perf_ctx();
         self.table.put(key, lsn, value).await.expect("put fail");
+        photondb::perf::with(|ctx| {
+            if ctx.total > Duration::from_millis(300) {
+                log::info!("slow PUT: {ctx:?}");
+            }
+        });
         Ok(())
     }
 
     async fn get(&self, key: &[u8], lsn: u64) -> Result<Option<Vec<u8>>> {
+        photondb::perf::reset_perf_ctx();
         let r = self.table.get(key, lsn).await.expect("get fail");
+        photondb::perf::with(|ctx| {
+            if ctx.total > Duration::from_millis(200) {
+                log::info!("slow GET: {ctx:?}");
+            }
+        });
         Ok(r)
     }
 
