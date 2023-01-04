@@ -10,7 +10,7 @@ homepage = "https://photondb.io"
 repository = "https://github.com/photondb/photondb"
 
 [workspace.dependencies]
-photonio = "0.0.5"
+photonio = { git = "https://github.com/w41ter/photonio.git" }
 
 [profile.bench]
 debug = true
