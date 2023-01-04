@@ -25,6 +25,7 @@ where
         let mut options = TableOptions::default();
         options.page_store.prepopulate_cache_on_flush = false;
         options.page_store.cache_strict_capacity_limit = true;
+        options.page_store.use_direct_io = true;
         options.page_store.cache_estimated_entry_charge = 4840;
         options.page_store.cache_capacity = config.cache_size as usize;
         options.page_store.max_write_buffers = config.max_write_buffers;
