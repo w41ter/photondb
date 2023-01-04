@@ -205,7 +205,7 @@ impl<E: Env> Manifest<E> {
         {
             Ok(f) => f,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(_) => panic!("read current meet error"),
+            Err(err) => panic!("read current meet error: {err:?}"),
         };
         let mut file_num_bytes = vec![0u8; core::mem::size_of::<u32>()];
         curr_file_reader
